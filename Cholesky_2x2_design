@@ -1,0 +1,248 @@
+-- Cholesky_decompostion Design 
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+entity cholesky_2x2 is
+  port (
+    clk     : in  std_logic;
+    start   : in  std_logic;
+    p11_in  : in  signed(31 downto 0);  -- Q20.12
+    p12_in  : in  signed(31 downto 0);  -- Q20.12
+    p22_in  : in  signed(31 downto 0);  -- Q20.12
+    l11_out : out signed(31 downto 0);  -- Q20.12
+    l21_out : out signed(31 downto 0);  -- Q20.12
+    l22_out : out signed(31 downto 0);  -- Q20.12
+    done    : out std_logic
+  );
+end entity;
+architecture Behavioral of cholesky_2x2 is
+  -- State machine
+  type state_type is (IDLE, START_L11, WAIT_L11, CALC_L21, CALC_L21_SQUARED, PREP_L22, START_L22, WAIT_L22, FINISHED);
+  signal state : state_type := IDLE;
+  
+  -- Internal signals
+  signal p11, p12, p22 : signed(31 downto 0);
+  signal l11, l21, l22 : signed(31 downto 0);
+  
+  -- Square root L11 signals
+  signal sqrt_l11_input  : signed(31 downto 0);
+  signal sqrt_l11_output : signed(31 downto 0);
+  signal sqrt_l11_start  : std_logic;
+  signal sqrt_l11_done   : std_logic;
+  
+  -- Square root L22 signals
+  signal sqrt_l22_input  : signed(31 downto 0);
+  signal sqrt_l22_output : signed(31 downto 0);
+  signal sqrt_l22_start  : std_logic;
+  signal sqrt_l22_done   : std_logic;
+  
+  signal l21_squared   : signed(31 downto 0);
+  signal temp_sub      : signed(31 downto 0);
+  
+  -- Constants for Q20.12 format
+  constant Q : integer := 12;
+  constant ONE : signed(31 downto 0) := to_signed(4096, 32); -- 1.0 in Q20.12
+  
+  -- Component for square root
+  component sqrt_newton is
+    port (
+      clk    : in  std_logic;
+      start_rt  : in  std_logic;
+      x_in   : in  signed(31 downto 0);
+      x_out  : out signed(31 downto 0);
+      done   : out std_logic
+    );
+  end component;
+  
+begin
+  -- Square root L11 component instantiation
+  sqrt_l11_inst : sqrt_newton
+    port map (
+      clk   => clk,
+      start_rt => sqrt_l11_start,
+      x_in  => sqrt_l11_input,
+      x_out => sqrt_l11_output,
+      done  => sqrt_l11_done
+    );
+    
+  -- Square root L22 component instantiation
+  sqrt_l22_inst : sqrt_newton
+    port map (
+      clk   => clk,
+      start_rt => sqrt_l22_start,
+      x_in  => sqrt_l22_input,
+      x_out => sqrt_l22_output,
+      done  => sqrt_l22_done
+    );
+  
+  -- Main FSM process
+  process(clk)
+    variable temp_div : signed(63 downto 0);
+    variable temp_mul : signed(63 downto 0);
+  begin
+    if rising_edge(clk) then
+      -- Default values
+      sqrt_l11_start <= '0';  -- Default to 0, only pulse for one cycle
+      sqrt_l22_start <= '0';  -- Default to 0, only pulse for one cycle
+      done <= '0';
+      
+      case state is
+        when IDLE =>
+          if start = '1' then
+            -- Latch inputs
+            p11 <= p11_in;
+            p12 <= p12_in;
+            p22 <= p22_in;
+            state <= START_L11;
+          end if;
+          
+        when START_L11 =>
+          -- Start computing L11 = sqrt(P11)
+          sqrt_l11_input <= p11;
+          sqrt_l11_start <= '1';  -- Single cycle pulse
+          state <= WAIT_L11;
+          
+        when WAIT_L11 =>
+          -- sqrt_l11_start automatically cleared (default is '0')
+          if sqrt_l11_done = '1' then
+            l11 <= sqrt_l11_output;
+            state <= CALC_L21;
+          end if;
+          
+        when CALC_L21 =>
+          -- Calculate L21 = P12 / L11
+          if l11 /= 0 then
+            -- Fixed-point division: (P12 << Q) / L11
+            temp_div := shift_left(resize(p12, 64), Q);
+            temp_div := temp_div / resize(l11, 64);
+            l21 <= resize(temp_div, 32);
+          else
+            -- Error case: L11 is zero
+            l21 <= (others => '0');
+          end if;
+          state <= CALC_L21_SQUARED;
+        
+        when CALC_L21_SQUARED =>
+          -- Calculate L21^2 for next step
+          temp_mul := l21 * l21;
+          -- Result has 24 fractional bits, shift right by 12 to get Q20.12
+          l21_squared <= resize(shift_right(temp_mul, 12), 32);
+          state <= PREP_L22;
+          
+        when PREP_L22 =>
+          -- Calculate P22 - L21^2 and let it settle
+          temp_sub <= p22 - l21_squared;
+          state <= START_L22;
+          
+        when START_L22 =>
+          -- Now start the square root with settled input
+          sqrt_l22_input <= temp_sub;
+          sqrt_l22_start <= '1';  -- Single cycle pulse
+          state <= WAIT_L22;
+          
+        when WAIT_L22 =>
+          -- sqrt_l22_start automatically cleared
+          -- Wait for sqrt calculation to complete
+          if sqrt_l22_done = '1' then
+            l22 <= sqrt_l22_output;
+            done <= '1';
+            state <= FINISHED;
+          end if;    
+        when FINISHED =>
+          done <= '1';
+          if start = '0' then  -- Wait for start to go low
+            state <= IDLE;
+          end if;
+            when others =>
+          state <= IDLE;
+      end case;
+    end if;
+  end process;
+  -- Output assignments
+  l11_out <= l11;
+  l21_out <= l21;
+  l22_out <= l22;
+  end Behavioral;
+Library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity sqrt_newton is
+  port (
+    clk      : in  std_logic;
+    start_rt : in  std_logic;
+    x_in     : in  signed(31 downto 0);  -- Q20.12
+    x_out    : out signed(31 downto 0);  -- Q20.12
+    done     : out std_logic
+  );
+end entity;
+
+architecture Behavioral of sqrt_newton is
+  type state_type is (IDLE, INIT, ITERATE, FINISH);
+  signal state : state_type := IDLE;
+  
+  signal x_current : signed(31 downto 0);
+  signal x_next    : signed(31 downto 0);
+  signal iteration : integer range 0 to 15;
+  signal x_input   : signed(31 downto 0);
+  
+  constant Q : integer := 12;
+  constant ITERATIONS : integer := 8;  -- Changed from 4 to 8
+  constant HALF : signed(31 downto 0) := to_signed(2048, 32); -- 0.5 in Q20.12
+  
+begin
+  -- State machine
+  process(clk)
+    variable temp_div : signed(63 downto 0);
+    variable temp_sum : signed(31 downto 0);
+    variable temp_mul : signed(63 downto 0);
+  begin
+    if rising_edge(clk) then
+      case state is
+        when IDLE =>
+          done <= '0';
+          if start_rt = '1' then
+            x_input <= x_in;
+            iteration <= 0;
+            state <= INIT;
+          end if;
+          
+        when INIT =>
+          -- Keep the simple initial guess: x0 = input / 2
+          x_current <= shift_right(x_input, 1);
+          state <= ITERATE;
+          
+        when ITERATE =>
+          -- Newton-Raphson: x_next = 0.5 * (x_current + N/x_current)
+          -- First calculate N/x_current
+          temp_div := shift_left(resize(x_input, 64), Q);
+          temp_div := temp_div / x_current;
+          
+          -- Add x_current + N/x_current
+          temp_sum := x_current + resize(temp_div(31 downto 0), 32);
+          
+          -- Multiply by 0.5
+          temp_mul := temp_sum * HALF;
+          x_next <= resize(shift_right(temp_mul, Q), 32);
+          
+          x_current <= x_next;
+          iteration <= iteration + 1;
+          
+          if iteration >= ITERATIONS - 1 then
+            state <= FINISH;
+          end if;
+          
+        when FINISH =>
+          x_out <= x_current;
+          done <= '1';
+          if start_rt = '0' then
+            state <= IDLE;
+          end if;
+          
+        when others =>
+          state <= IDLE;
+      end case;
+    end if;
+  end process;
+
+end Behavioral;
