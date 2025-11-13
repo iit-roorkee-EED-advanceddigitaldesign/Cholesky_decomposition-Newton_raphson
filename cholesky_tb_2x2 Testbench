@@ -1,0 +1,185 @@
+--Testbench
+
+  library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity cholsky_tb_2x2 is
+end entity;
+
+architecture Behavioral of cholsky_tb_2x2 is
+    signal clk     : std_logic := '0';
+    signal start   : std_logic := '0';
+    signal p11_in  : signed(31 downto 0) := (others => '0');
+    signal p12_in  : signed(31 downto 0) := (others => '0');
+    signal p22_in  : signed(31 downto 0) := (others => '0');
+    signal l11_out : signed(31 downto 0);
+    signal l21_out : signed(31 downto 0);
+    signal l22_out : signed(31 downto 0);
+    signal done    : std_logic;
+
+    -- Clock generation
+    constant T : time := 10 ns;
+begin
+    clk_process : process
+    begin
+        clk <= '0'; wait for T/2;
+        clk <= '1'; wait for T/2;
+    end process;
+
+    -- DUT instantiation
+    uut: entity work.cholesky_2x2
+        port map (
+            clk      => clk,
+            start    => start,
+            p11_in   => p11_in,
+            p12_in   => p12_in,
+            p22_in   => p22_in,
+            l11_out  => l11_out,
+            l21_out  => l21_out,
+            l22_out  => l22_out,
+            done     => done
+        );
+
+    -- Test process
+    stim_proc: process
+        variable m11, m12, m22 : integer;
+    begin
+        -- Test simple symmetric positive definite matrix
+        -- | 4  2 |
+        -- | 2  3 |
+        -- In Q20.12: 4->16384, 2->8192, 3->12288
+        p11_in <= to_signed(16384, 32);
+        p12_in <= to_signed(8192, 32);
+        p22_in <= to_signed(12288, 32);
+
+        wait for T;
+        start <= '1';
+        wait for T;
+        start <= '0';
+
+        -- Wait until done
+        wait until done = '1';
+
+        -- Check expected outputs by comparing l11_out, l21_out, l22_out visually or with assertions as needed
+        
+        wait for 4*T;
+
+        -- Add more test cases
+
+        wait;
+    end process;
+end Behavioral;
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity tb_sqrt_newton is
+end entity;
+
+architecture Behavioral of tb_sqrt_newton is
+    signal clk      : std_logic := '0';
+    signal start_rt : std_logic := '0';
+    signal x_in     : signed(31 downto 0) := (others => '0');
+    signal x_out    : signed(31 downto 0);
+    signal done     : std_logic;
+
+    -- Clock generation
+    constant T : time := 10 ns;
+begin
+    clk_process : process
+    begin
+        clk <= '0'; wait for T/2;
+        clk <= '1'; wait for T/2;
+    end process;
+
+    -- DUT Instantiation
+    uut: entity work.sqrt_newton
+        port map (
+            clk      => clk,
+            start_rt => start_rt,
+            x_in     => x_in,
+            x_out    => x_out,
+            done     => done
+        );
+
+    -- Test process
+   stim_proc: process
+begin
+    -- Test Case 1: sqrt(4.0) = 2.0
+    -- Q20.12 : 4 -> 16384, expected output: 8192
+    x_in <= to_signed(16384, 32);
+    wait for T;
+    start_rt <= '1';
+    wait for T;
+    start_rt <= '0';
+
+    wait until done = '1';
+    assert (x_out = to_signed(8192, 32))
+      report "Test failed for sqrt(4.0)" severity error;
+
+    wait for 4*T;
+
+
+    -- Test Case 2: sqrt(1.0) = 1.0
+    -- Q20.12 : 1 -> 4096
+    x_in <= to_signed(4096, 32);
+    wait for T;
+    start_rt <= '1';
+    wait for T;
+    start_rt <= '0';
+
+    wait until done = '1';
+    assert (x_out = to_signed(4096, 32))
+      report "Test failed for sqrt(1.0)" severity error;
+
+    wait for 4*T;
+
+
+    -- Test Case 3: sqrt(2.0) approx = 1.414 → 5793
+    -- Q20.12 : 2 -> 8192, expected ≈ 1.414 * 4096 = 5793
+    x_in <= to_signed(8192, 32);
+    wait for T;
+    start_rt <= '1';
+    wait for T;
+    start_rt <= '0';
+
+    wait until done = '1';
+    assert (x_out = to_signed(5793, 32))
+      report "Test failed for sqrt(2.0)" severity error;
+
+    wait for 4*T;
+
+
+    -- Test Case 4: sqrt(0.25) = 0.5
+    -- Q20.12 : 0.25 = 1024 → output = 2048
+    x_in <= to_signed(1024, 32);
+    wait for T;
+    start_rt <= '1';
+    wait for T;
+    start_rt <= '0';
+
+    wait until done = '1';
+    assert (x_out = to_signed(2048, 32))
+      report "Test failed for sqrt(0.25)" severity error;
+
+    wait for 4*T;
+
+
+    -- Test Case 5: sqrt(16.0) = 4.0
+    -- Q20.12 : 16 = 65536 → output = 16384
+    x_in <= to_signed(65536, 32);
+    wait for T;
+    start_rt <= '1';
+    wait for T;
+    start_rt <= '0';
+
+    wait until done = '1';
+    assert (x_out = to_signed(16384, 32))
+      report "Test failed for sqrt(16.0)" severity error;
+
+    wait;
+
+end process;
+end architecture;
